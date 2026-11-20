@@ -1,6 +1,6 @@
 # lovecraft-corpus
 
-A cleanly formatted JSONL corpus of H.P. Lovecraft's fiction, poetry, essays, and letters from [hplovecraft.com](https://hplovecraft.com) for ML-related purposes.
+A cleanly formatted JSONL corpus of H.P. Lovecraft's fiction, poetry, essays, and letters for ML-related purposes.
 
 #### Corpus Size
 
@@ -44,6 +44,6 @@ ds = load_dataset("json", data_files="data/lovecraft.jsonl", split="train")
 
 The script is licensed under the [MIT License](LICENSE).
 
-The dataset is compiled from [hplovecraft.com](https://hplovecraft.com) for research and educational purposes.
+The dataset is compiled from [hplovecraft.com](https://hplovecraft.com) and [wikisource](https://en.wikisource.org/wiki/Author:Howard_Phillips_Lovecraft) for research and educational purposes.
 H.P. Lovecraft's works are widely considered to be in the public domain, though copyright status for certain letters or collaborative works may vary by jurisdiction.
 If you are a rights holder and believe any included text infringes copyright, please open an issue and it will be removed promptly.
