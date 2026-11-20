@@ -1,5 +1,5 @@
 # lovecraft-comprehensive-corpus
-[![Hugging Face Dataset](https://img.shields.io/badge/🤗%20Hugging%20Face-Gyran%2Flovecraft-yellow)](https://huggingface.co/datasets/Gyran/lovecraft)
+[![Hugging Face Dataset](https://img.shields.io/badge/🤗%20Hugging%20Face-Gyran%2Flovecraft-yellow)](https://huggingface.co/datasets/Gyran/lovecraft-comprehensive-corpus)
 
 A cleanly formatted JSONL corpus of H.P. Lovecraft's fiction, poetry, essays, and letters for ML-related purposes.
 
