@@ -1,4 +1,5 @@
-# lovecraft-corpus
+# lovecraft-comprehensive-corpus
+[![Hugging Face Dataset](https://img.shields.io/badge/🤗%20Hugging%20Face-Gyran%2Flovecraft-yellow)](https://huggingface.co/datasets/Gyran/lovecraft)
 
 A cleanly formatted JSONL corpus of H.P. Lovecraft's fiction, poetry, essays, and letters for ML-related purposes.
 
@@ -9,7 +10,7 @@ A cleanly formatted JSONL corpus of H.P. Lovecraft's fiction, poetry, essays, an
 | essays | 47 | 656,628 |
 | fiction | 105 | 8,177,709 |
 | letters | 8 | 89,008 |
-| poetry | 49 | 164,644 |
+| poetry | 78 | 164,644 |
 | **Total** | **238** | **9,087,989**  (~9 MB) |
 
 #### Usage
@@ -32,12 +33,14 @@ python corpus.py
 }
 ```
 
-#### Loading with Hugging Face 
+### Quick Start
+
+Load the pre-built dataset directly from [Hugging Face](https://huggingface.co/datasets/Gyran/lovecraft):
 
 ```python
 from datasets import load_dataset
 
-ds = load_dataset("json", data_files="data/lovecraft.jsonl", split="train")
+ds = load_dataset("Gyran/lovecraft-comprehensive-corpus")
 ```
 
 ### License & Disclaimer
