@@ -413,6 +413,9 @@ def build_corpus(entries: list[Entry]) -> list[dict]:
         if not e.cache_path.exists():
             continue
         text = e.cache_path.read_text(encoding="utf-8").strip()
+        if e.category in ("fiction", "essays"):
+            text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
+            text = re.sub(r" {2,}", " ", text)
         if len(text) < MIN_CHARS:
             skipped += 1
             continue
