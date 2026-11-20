@@ -1,26 +1,37 @@
-# lovecraft-comprehensive-corpus
-[![Hugging Face Dataset](https://img.shields.io/badge/🤗%20Hugging%20Face-Gyran%2Flovecraft-yellow)](https://huggingface.co/datasets/Gyran/lovecraft-comprehensive-corpus)
+# H.P. Lovecraft Digital Archive
 
-A cleanly formatted JSONL corpus of H.P. Lovecraft's fiction, poetry, essays, and letters for ML-related purposes.
+[![Read Online](https://img.shields.io/badge/Read%20Online-Digital%20Archive-6b3a2e)](https://lla-bas.github.io/lovecraft-corpus/)
+[![Hugging Face Dataset](https://img.shields.io/badge/🤗%20Hugging%20Face-Dataset-yellow)](https://huggingface.co/datasets/Gyran/lovecraft-comprehensive-corpus)
 
-#### Corpus Size
+A searchable digital archive of H.P. Lovecraft's fiction, essays, poetry, and personal correspondence, compiled into a clean reading interface and a single structured text file.
 
-| Category | Documents | Characters |
+**[Open the Archive Reader →](https://lla-bas.github.io/lovecraft-corpus/)**
+
+---
+
+#### Archive Contents
+
+| Category | Works | Characters |
 | :--- | ---: | ---: |
-| essays | 47 | 656,628 |
-| fiction | 105 | 8,177,709 |
-| letters | 88 | 547,512 |
-| poetry | 77 | 164,351 |
-| **Total** | **317** | **9,546,200**|
+| Fiction | 105 | 8,177,709 |
+| Essays | 47 | 656,628 |
+| Letters | 88 | 547,512 |
+| Poetry | 77 | 164,351 |
+| **Total** | **317** | **9,546,200** |
 
-#### Usage
-The scraping script is made available for those who want to run it themselves.
-```bash
-pip install requests beautifulsoup4
-python corpus.py
-```
+#### Sources
 
-#### Schema
+Texts are compiled and deduplicated in priority order from:
+
+* [The H.P. Lovecraft Archive](https://hplovecraft.com)
+* [Wikisource](https://en.wikisource.org/wiki/Author:Howard_Phillips_Lovecraft)
+* [The LetterCraft Project](https://github.com/punchmonster/Lovecraft-Letters)
+
+---
+
+#### Raw Data
+
+The complete archive is stored in [`data/lovecraft.jsonl`](data/lovecraft.jsonl) (one JSON object per line):
 
 ```json
 {
@@ -33,20 +44,22 @@ python corpus.py
 }
 ```
 
-### Quick Start
+#### Rebuild Locally
 
-Load the pre-built dataset directly from [Hugging Face](https://huggingface.co/datasets/Gyran/lovecraft):
-
-```python
-from datasets import load_dataset
-
-ds = load_dataset("Gyran/lovecraft-comprehensive-corpus")
+```Bash
+pip install requests beautifulsoup4
+python corpus.py
 ```
 
-### License & Disclaimer
+#### Hugging Face Mirror
+For research or NLP workflows, the dataset is also mirrored on Hugging Face:
 
-The script is licensed under the [MIT License](LICENSE).
+```Python
+from datasets import load_dataset
 
-The dataset is compiled from [hplovecraft.com](https://hplovecraft.com), [wikisource](https://en.wikisource.org/wiki/Author:Howard_Phillips_Lovecraft) and [Lovecraft-Letters](https://github.com/punchmonster/Lovecraft-Letters) for research and educational purposes.
-H.P. Lovecraft's works are widely considered to be in the public domain, though copyright status for certain letters or collaborative works may vary by jurisdiction.
-If you are a rights holder and believe any included text infringes copyright, please open an issue and it will be removed promptly.
+ds = load_dataset("Lla-bas/lovecraft-comprehensive-corpus")
+```
+#### License & Disclaimer
+The scraper and web reader are licensed under the MIT License.
+
+Texts are compiled for archival, research, and educational purposes. H.P. Lovecraft's works are widely considered to be in the public domain, though copyright status for certain letters or collaborative works may vary by jurisdiction. If you are a rights holder and believe any included text infringes copyright, please open an issue and it will be removed promptly.
