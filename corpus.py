@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Build a Lovecraft corpus from hplovecraft.com and Wikisource.
+Build a Lovecraft corpus from hplovecraft.com, Wikisource, and LetterCraft.
 
 Run: python corpus.py
 
@@ -27,6 +27,7 @@ HPL_BASE = "https://hplovecraft.com"
 WS_API = "https://en.wikisource.org/w/api.php"
 WS_BASE = "https://en.wikisource.org/wiki/"
 WS_AUTHOR_PAGE = "Author:Howard Phillips Lovecraft"
+LC_API = "https://api.github.com/repos/punchmonster/Lovecraft-Letters/contents"
 
 CATEGORIES = ("fiction", "poetry", "essays", "letters")
 WS_SECTIONS = {"Poetry": "poetry", "Essays": "essays", "Letters": "letters"}
@@ -42,22 +43,30 @@ DELAY = 1.0         # seconds between requests
 MIN_CHARS = 75      # drop shorter fragments
 
 LINK_RE = re.compile(r"^([a-z]+)/([a-z0-9_-]+\.aspx)$")
+LC_FILE_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})-(.+)$")
 SKIP_SLUGS = {"chrono.aspx", "index.aspx", "publish.aspx", "contents.aspx"}
 WS_STRIP_SELECTORS = (
     ".ws-noexport", ".noprint", ".headerContainer", ".footertemplate",
     ".mw-editsection", ".toc", "sup.reference", "style", "script",
 )
+LC_TYPOS = {
+    "Aflred": "Alfred",
+    "Rimmel": "Rimel",
+    "Block": "Bloch",
+    "Harlow": "Barlow",
+}
 
 
 @dataclass
 class Entry:
     key: str            # unique internal key, e.g. "hplovecraft/fiction/cc.aspx"
-    origin: str         # "hplovecraft" | "wikisource"
+    origin: str         # "hplovecraft" | "wikisource" | "lettercraft"
     category: str       # "fiction" | "poetry" | "essays" | "letters"
     title: str
     source: str         # canonical URL
     cache_path: Path
     ws_page: str | None = None
+    raw_url: str | None = None
 
 
 # ---------- Extraction ----------
@@ -107,6 +116,21 @@ def extract_wikisource(html_str: str) -> str | None:
     return "\n\n".join(blocks) if blocks else None
 
 
+def extract_lettercraft(md_bytes: bytes) -> str | None:
+    """Strip Markdown formatting from a LetterCraft .md transcript."""
+
+    text = md_bytes.decode("utf-8", errors="replace")
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)          # images
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)      # links
+    text = re.sub(r"(?m)^#{1,6}\s*", "", text)                # headings
+    text = re.sub(r"(?m)^>\s?", "", text)                     # blockquotes
+    text = re.sub(r"(?m)^[-*_]{3,}\s*$", "", text)            # horizontal rules
+    text = re.sub(r"(\*\*|__|\*|_)(.*?)\1", r"\2", text)      # bold/italic
+    text = re.sub(r"<[^>]+>", "", text)                       # inline HTML
+    text = text.strip()
+    return text or None
+
+
 def normalize(text: str) -> str:
     """CRLF -> LF, strip trailing spaces, collapse >2 blank lines."""
 
@@ -146,6 +170,7 @@ def assign_ids(entries: list[Entry]) -> dict[str, str]:
         mapping[e.key] = base_id if n == 1 else f"{base_id}-{n}"
     return mapping
 
+
 def shingles(text: str, k: int = 5) -> set[tuple[str, ...]]:
     words = re.findall(r"[a-z0-9]+", text.lower())
     if len(words) < k:
@@ -153,11 +178,18 @@ def shingles(text: str, k: int = 5) -> set[tuple[str, ...]]:
     return {tuple(words[i:i + k]) for i in range(len(words) - k + 1)}
 
 
-def deduplicate(records: list[dict], threshold: float = 0.6) -> list[dict]:
-    """Drop near-duplicate texts, keeping hplovecraft.com over wikisource."""
+def source_priority(source_url: str) -> int:
+    if "hplovecraft.com" in source_url:
+        return 0
+    if "wikisource.org" in source_url:
+        return 1
+    return 2
 
-    # Process hplovecraft.com first so it always wins ties
-    ordered = sorted(records, key=lambda r: (0 if "hplovecraft.com" in r["source"] else 1, r["id"]))
+
+def deduplicate(records: list[dict], threshold: float = 0.6) -> list[dict]:
+    """Drop near-duplicate texts, prioritizing hplovecraft.com > wikisource > lettercraft."""
+
+    ordered = sorted(records, key=lambda r: (source_priority(r["source"]), r["id"]))
     kept: list[dict] = []
     kept_shingles: list[set[tuple[str, ...]]] = []
 
@@ -177,13 +209,13 @@ def deduplicate(records: list[dict], threshold: float = 0.6) -> list[dict]:
 
     return kept
 
+
 # ---------- Discovery ----------
 
 def fetch(session: requests.Session, url: str, params: dict | None = None) -> bytes:
     r = session.get(url, params=params, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
     r.raise_for_status()
     return r.content
-
 
 def discover_hplovecraft(session: requests.Session) -> list[Entry]:
     """Walk /writings/texts/ on hplovecraft.com."""
@@ -218,7 +250,7 @@ def discover_hplovecraft(session: requests.Session) -> list[Entry]:
 
 
 def discover_wikisource(session: requests.Session) -> list[Entry]:
-    """Walk Poetry and Essays sections of the Wikisource author page."""
+    """Walk Poetry, Essays, and Letters sections of the Wikisource author page."""
 
     print(f"Index: {WS_BASE}{WS_AUTHOR_PAGE.replace(' ', '_')}")
     raw = fetch(session, WS_API, params={
@@ -242,7 +274,6 @@ def discover_wikisource(session: requests.Session) -> list[Entry]:
             print(f"  WARN section '{heading_id}' not found")
             continue
 
-        # Modern MediaWiki wraps headings in <div class="mw-heading">
         node = h.parent if h.parent and "mw-heading" in (h.parent.get("class") or []) else h
         for sib in node.find_next_siblings():
             if sib.name in ("h2", "h3") or "mw-heading" in (sib.get("class") or []):
@@ -274,19 +305,59 @@ def discover_wikisource(session: requests.Session) -> list[Entry]:
     return entries
 
 
-def merge_entries(primary: list[Entry], secondary: list[Entry]) -> list[Entry]:
-    """Keep all primary entries; append secondary entries not already present."""
+def discover_lettercraft(session: requests.Session) -> list[Entry]:
+    """List letter transcripts from punchmonster/Lovecraft-Letters."""
 
-    seen = {(e.category, norm_title(e.title)) for e in primary}
-    merged = list(primary)
-    added = 0
-    for e in secondary:
-        sig = (e.category, norm_title(e.title))
-        if sig not in seen:
-            seen.add(sig)
-            merged.append(e)
-            added += 1
-    print(f"Merged: {len(primary)} primary + {added} new from Wikisource ({len(secondary) - added} duplicates skipped)")
+    if "letters" not in CATEGORIES:
+        return []
+
+    print(f"Index: {LC_API}")
+    items = json.loads(fetch(session, LC_API))
+    entries: list[Entry] = []
+
+    for item in items:
+        name = item.get("name", "")
+        if item.get("type") != "file" or not name.endswith(".md") or name.lower() == "readme.md":
+            continue
+        stem = Path(name).stem
+        m = LC_FILE_RE.match(stem)
+        if m:
+            year, month, day, recipient = m.groups()
+            words = [LC_TYPOS.get(w, w) for w in recipient.split("-")]
+            date_str = f"{year}-{month}" if day == "99" else f"{year}-{month}-{day}"
+            title = f"Letter to {' '.join(words)} ({date_str})"
+        else:
+            title = stem.replace("-", " ")
+
+        entries.append(Entry(
+            key=f"lettercraft/letters/{stem}",
+            origin="lettercraft",
+            category="letters",
+            title=title,
+            source=item["html_url"],
+            cache_path=CACHE_DIR / "lettercraft" / "letters" / f"{stem}.txt",
+            raw_url=item["download_url"],
+        ))
+
+    print(f"  {len(entries)} links")
+    return entries
+
+
+def merge_entries(*sources: list[Entry]) -> list[Entry]:
+    """Merge entry lists in priority order, skipping duplicate (category, norm_title)."""
+
+    seen: set[tuple[str, str]] = set()
+    merged: list[Entry] = []
+    skipped = 0
+    for src in sources:
+        for e in src:
+            sig = (e.category, norm_title(e.title))
+            if sig not in seen:
+                seen.add(sig)
+                merged.append(e)
+            else:
+                skipped += 1
+    print(f"Merged: {len(merged)} unique entries ({skipped} title duplicates skipped)")
     return merged
 
 
@@ -305,7 +376,7 @@ def scrape_entries(session: requests.Session, entries: list[Entry]) -> None:
         try:
             if e.origin == "hplovecraft":
                 text = extract_hplovecraft(fetch(session, e.source))
-            else:
+            elif e.origin == "wikisource":
                 raw = fetch(session, WS_API, params={
                     "action": "parse",
                     "page": e.ws_page,
@@ -315,6 +386,8 @@ def scrape_entries(session: requests.Session, entries: list[Entry]) -> None:
                 })
                 html_str = json.loads(raw)["parse"]["text"]["*"]
                 text = extract_wikisource(html_str)
+            else:
+                text = extract_lettercraft(fetch(session, e.raw_url))
 
             if not text:
                 print("    WARN no text extracted")
@@ -325,6 +398,7 @@ def scrape_entries(session: requests.Session, entries: list[Entry]) -> None:
         except Exception as exc:
             print(f"    ERROR {exc}")
         time.sleep(DELAY)
+
 
 # ---------- Build ----------
 
@@ -385,7 +459,8 @@ def main() -> None:
     session = requests.Session()
     hpl = discover_hplovecraft(session)
     ws = discover_wikisource(session)
-    entries = merge_entries(hpl, ws)
+    lc = discover_lettercraft(session)
+    entries = merge_entries(hpl, ws, lc)
     if not entries:
         sys.exit("No entries discovered due to changed site structure or network error.")
     scrape_entries(session, entries)
