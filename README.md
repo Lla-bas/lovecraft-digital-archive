@@ -9,9 +9,9 @@ A cleanly formatted JSONL corpus of H.P. Lovecraft's fiction, poetry, essays, an
 | :--- | ---: | ---: |
 | essays | 47 | 656,628 |
 | fiction | 105 | 8,177,709 |
-| letters | 8 | 89,008 |
-| poetry | 78 | 164,644 |
-| **Total** | **238** | **9,087,989**|
+| letters | 88 | 547,512 |
+| poetry | 77 | 164,351 |
+| **Total** | **317** | **9,546,200**|
 
 #### Usage
 The scraping script is made available for those who want to run it themselves.
