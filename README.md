@@ -5,7 +5,7 @@
 
 A searchable digital archive of H.P. Lovecraft's fiction, essays, poetry, and personal correspondence, compiled into a clean reading interface and a single structured text file.
 
-**[Open the Archive Reader →](https://lla-bas.github.io/lovecraft-corpus/)**
+**[Open the Archive Reader →](https://lla-bas.github.io/lovecraft-digital-archive/)**
 
 ---
 
