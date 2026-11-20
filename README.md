@@ -47,6 +47,6 @@ ds = load_dataset("Gyran/lovecraft-comprehensive-corpus")
 
 The script is licensed under the [MIT License](LICENSE).
 
-The dataset is compiled from [hplovecraft.com](https://hplovecraft.com) and [wikisource](https://en.wikisource.org/wiki/Author:Howard_Phillips_Lovecraft) for research and educational purposes.
+The dataset is compiled from [hplovecraft.com](https://hplovecraft.com), [wikisource](https://en.wikisource.org/wiki/Author:Howard_Phillips_Lovecraft) and [Lovecraft-Letters](https://github.com/punchmonster/Lovecraft-Letters) for research and educational purposes.
 H.P. Lovecraft's works are widely considered to be in the public domain, though copyright status for certain letters or collaborative works may vary by jurisdiction.
 If you are a rights holder and believe any included text infringes copyright, please open an issue and it will be removed promptly.
