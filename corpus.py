@@ -43,13 +43,7 @@ SKIP_SLUGS = {"chrono.aspx", "index.aspx", "publish.aspx", "contents.aspx"}
 # ---------- Extraction ----------
 
 def extract_text(html_bytes: bytes) -> str | None:
-    """
-    Pull the body from a text page.
-
-    Prose: <p> paragraphs joined by blank lines; <br> becomes newline.
-    Poetry (no <p>): line breaks preserved via separator="\\n".
-    Returns None if no body div is found.
-    """
+    """ Pull the body from a text page. """
 
     soup = BeautifulSoup(html_bytes, "html.parser")
     blocks: list[str] = []
@@ -87,12 +81,7 @@ def slugify(text: str) -> str:
 
 
 def assign_ids(titles: dict[str, str]) -> dict[str, str]:
-    """
-    Map cache keys ("fiction/a.aspx") to public ids ("fiction/the-alchemist").
-
-    Collisions get -2, -3, ... suffixes in deterministic key order.
-    Empty titles fall back to the source basename.
-    """
+    """ Map cache keys ("fiction/a.aspx") to public ids ("fiction/the-alchemist"). """
 
     counts: dict[str, int] = {}
     mapping: dict[str, str] = {}
@@ -111,7 +100,7 @@ def assign_ids(titles: dict[str, str]) -> dict[str, str]:
 # ---------- Scrape ----------
 
 def fetch(session: requests.Session, url: str) -> bytes:
-    """Single GET; raises on failure. Callers catch and skip."""
+    """ Single GET; raises on failure. Callers catch and skip. """
 
     r = session.get(url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
     r.raise_for_status()
@@ -119,12 +108,7 @@ def fetch(session: requests.Session, url: str) -> bytes:
 
 
 def discover_entries(session: requests.Session) -> dict[str, str]:
-    """
-    Walk the four index pages and return { key -> title }.
-
-    Links that don't look like text slugs (nav, anchors) are ignored.
-    A failing category is logged and skipped; the others still run.
-    """
+    """ Walk the four index pages and return { key -> title }. """
 
     entries: dict[str, str] = {}
     for cat in CATEGORIES:
@@ -152,12 +136,7 @@ def discover_entries(session: requests.Session) -> dict[str, str]:
 
 
 def scrape_texts(session: requests.Session, entries: dict[str, str]) -> None:
-    """
-    Download each entry into cache/<key>.txt.
-
-    Existing files are skipped. Per-document errors are
-    logged and skipped; the run continues.
-    """
+    """ Download each entry into cache/<key>.txt. """
 
     total = len(entries)
     for i, key in enumerate(sorted(entries), 1):
@@ -184,12 +163,7 @@ def scrape_texts(session: requests.Session, entries: dict[str, str]) -> None:
 # ---------- Build ----------
 
 def build_corpus(entries: dict[str, str]) -> list[dict]:
-    """
-    Read cache/ and write data/lovecraft.jsonl.
-
-    IDs are assigned across the full `entries` set first, so records
-    filtered out by MIN_CHARS don't shift the ids of survivors.
-    """
+    """ Read cache/ and write data/lovecraft.jsonl. """
     
     id_map = assign_ids(entries)
     records: list[dict] = []
