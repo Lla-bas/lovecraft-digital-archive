@@ -2,7 +2,7 @@
 
 A cleanly formatted JSONL corpus of H.P. Lovecraft's fiction, poetry, essays, and letters from [hplovecraft.com](https://hplovecraft.com) for ML-related purposes.
 
-### Corpus Size
+#### Corpus Size
 
 | Category | Documents | Characters |
 | :--- | ---: | ---: |
@@ -12,13 +12,7 @@ A cleanly formatted JSONL corpus of H.P. Lovecraft's fiction, poetry, essays, an
 | poetry | 49 | 115,159 |
 | **Total** | **164** | **8,818,585**  (~8.6 MB JSONL) |
 
-### Requirements
-
-- Python 3.10+
-- `requests`
-- `beautifulsoup4`
-
-### Usage
+#### Usage
 The scraping script is made available for those who want to run it themselves.
 ```bash
 pip install requests beautifulsoup4
