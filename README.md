@@ -6,11 +6,11 @@ A cleanly formatted JSONL corpus of H.P. Lovecraft's fiction, poetry, essays, an
 
 | Category | Documents | Characters |
 | :--- | ---: | ---: |
-| essays | 8 | 502,431 |
+| essays | 47 | 656,628 |
 | fiction | 105 | 8,177,709 |
-| letters | 2 | 23,286 |
-| poetry | 49 | 115,159 |
-| **Total** | **164** | **8,818,585**  (~8.6 MB JSONL) |
+| letters | 8 | 89,008 |
+| poetry | 49 | 164,644 |
+| **Total** | **238** | **9,087,989**  (~9 MB) |
 
 #### Usage
 The scraping script is made available for those who want to run it themselves.
