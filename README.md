@@ -7,18 +7,6 @@ A searchable digital archive of H.P. Lovecraft's fiction, essays, poetry, and pe
 
 **[Open the Archive Reader →](https://lla-bas.github.io/lovecraft-digital-archive/)**
 
----
-
-#### Archive Contents
-
-| Category | Works | Characters |
-| :--- | ---: | ---: |
-| Fiction | 105 | 8,177,709 |
-| Essays | 47 | 656,628 |
-| Letters | 88 | 547,512 |
-| Poetry | 77 | 164,351 |
-| **Total** | **317** | **9,546,200** |
-
 #### Sources
 
 Texts are compiled and deduplicated in priority order from:
