@@ -32,6 +32,13 @@ LC_API = "https://api.github.com/repos/punchmonster/Lovecraft-Letters/contents"
 CATEGORIES = ("fiction", "poetry", "essays", "letters")
 WS_SECTIONS = {"Poetry": "poetry", "Essays": "essays", "Letters": "letters"}
 
+# some pages are big enough to pass through the word count filter, but they are not actual works.
+WS_SKIP_PAGES = {
+    "In_the_Editor%27s_Study",
+    "Department_of_Public_Criticism",
+    # add any others
+}
+
 BASE_DIR = Path(__file__).resolve().parent
 CACHE_DIR = BASE_DIR / "cache"
 DATA_DIR = BASE_DIR / "data"
@@ -40,7 +47,7 @@ CORPUS_PATH = DATA_DIR / "lovecraft.jsonl"
 USER_AGENT = "lovecraft-corpus/1.0 (https://github.com/Lla-bas/lovecraft-corpus)"
 TIMEOUT = 30
 DELAY = 1.0         # seconds between requests
-MIN_CHARS = 75      # drop shorter fragments
+MIN_CHARS = 200     # drop shorter fragments
 
 LINK_RE = re.compile(r"^([a-z]+)/([a-z0-9_-]+\.aspx)$")
 LC_FILE_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})-(.+)$")
@@ -286,7 +293,7 @@ def discover_wikisource(session: requests.Session) -> list[Entry]:
                 if not href.startswith("/wiki/") or ":" in href.removeprefix("/wiki/"):
                     continue
                 page = unquote(href.removeprefix("/wiki/").split("#", 1)[0])
-                if page in seen_pages:
+                if page in seen_pages or page in WS_SKIP_PAGES:
                     continue
                 seen_pages.add(page)
                 title = a.get_text(" ", strip=True)
@@ -416,7 +423,7 @@ def build_corpus(entries: list[Entry]) -> list[dict]:
         if e.category in ("fiction", "essays"):
             text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
             text = re.sub(r" {2,}", " ", text)
-        if len(text) < MIN_CHARS:
+        if e.category != "poetry" and len(text) < MIN_CHARS: # poetry can be short!
             skipped += 1
             continue
         records.append({
