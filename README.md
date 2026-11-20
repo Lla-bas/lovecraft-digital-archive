@@ -2,6 +2,16 @@
 
 A cleanly formatted JSONL corpus of H.P. Lovecraft's fiction, poetry, essays, and letters from [hplovecraft.com](https://hplovecraft.com) for ML-related purposes.
 
+### Corpus Size
+
+| Category | Documents | Characters |
+| :--- | ---: | ---: |
+| essays | 8 | 502,431 |
+| fiction | 105 | 8,177,709 |
+| letters | 2 | 23,286 |
+| poetry | 49 | 115,159 |
+| **Total** | **164** | **8,818,585**  (~8.6 MB JSONL) |
+
 ### Requirements
 
 - Python 3.10+

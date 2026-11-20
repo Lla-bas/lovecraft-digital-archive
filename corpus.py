@@ -36,7 +36,7 @@ TIMEOUT = 30
 DELAY = 1.0         # seconds between requests
 MIN_CHARS = 75     # drop shorter fragments
 
-SLUG_RE = re.compile(r"^[a-z0-9-]+\.aspx$")
+LINK_RE = re.compile(r"^([a-z]+)/([a-z0-9_-]+\.aspx)$")
 SKIP_SLUGS = {"chrono.aspx", "index.aspx", "publish.aspx", "contents.aspx"}
 
 
@@ -106,32 +106,24 @@ def fetch(session: requests.Session, url: str) -> bytes:
     r.raise_for_status()
     return r.content
 
-
 def discover_entries(session: requests.Session) -> dict[str, str]:
-    """ Walk the four index pages and return { key -> title }. """
+    """Walk /writings/texts/ and return { 'cat/slug.aspx' -> title }."""
+
+    index_url = f"{BASE}/writings/texts/"
+    print(f"Index: {index_url}")
+    html = fetch(session, index_url)
+    soup = BeautifulSoup(html, "html.parser")
 
     entries: dict[str, str] = {}
-    for cat in CATEGORIES:
-        index_url = f"{BASE}/writings/{cat}/"
-        print(f"Index: {index_url}")
-        try:
-            html = fetch(session, index_url)
-        except Exception as e:
-            print(f"  SKIP {cat}: {e}")
+    for a in soup.find_all("a", href=True):
+        href = a["href"].removeprefix("/writings/texts/")
+        m = LINK_RE.match(href)
+        if not m or m.group(1) not in CATEGORIES or m.group(2) in SKIP_SLUGS:
             continue
+        if href not in entries:
+            entries[href] = a.get_text(" ", strip=True)
 
-        soup = BeautifulSoup(html, "html.parser")
-        found = 0
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            if not SLUG_RE.match(href) or href in SKIP_SLUGS:
-                continue
-            key = f"{cat}/{href}"
-            title = a.get_text(" ", strip=True)
-            if not entries.get(key):
-                entries[key] = title
-                found += 1
-        print(f"  {found} links")
+    print(f"  {len(entries)} links")
     return entries
 
 
