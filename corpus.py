@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-Build a Lovecraft corpus from hplovecraft.com.
+Build a Lovecraft corpus from hplovecraft.com and Wikisource.
 
-Run once: python corpus.py
+Run: python corpus.py
 
 Produces:
-    cache/<category>/<slug>.aspx.txt   downloaded bodies
-    data/manifest.json                 titles + source URLs
-    data/lovecraft.jsonl               final corpus
+    cache/<origin>/<category>/<slug>.txt   downloaded bodies
+    data/lovecraft.jsonl                   final corpus
 """
 
 import json
@@ -15,35 +14,56 @@ import re
 import sys
 import time
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 import requests
 from bs4 import BeautifulSoup
 
 # ---------- Constants ----------
 
-BASE = "https://hplovecraft.com"
+HPL_BASE = "https://hplovecraft.com"
+WS_API = "https://en.wikisource.org/w/api.php"
+WS_BASE = "https://en.wikisource.org/wiki/"
+WS_AUTHOR_PAGE = "Author:Howard Phillips Lovecraft"
+
 CATEGORIES = ("fiction", "poetry", "essays", "letters")
+WS_SECTIONS = {"Poetry": "poetry", "Essays": "essays", "Letters": "letters"}
 
 BASE_DIR = Path(__file__).resolve().parent
 CACHE_DIR = BASE_DIR / "cache"
 DATA_DIR = BASE_DIR / "data"
-MANIFEST_PATH = DATA_DIR / "manifest.json"
 CORPUS_PATH = DATA_DIR / "lovecraft.jsonl"
 
-USER_AGENT = "lovecraft-corpus/1.0"
+USER_AGENT = "lovecraft-corpus/1.0 (https://github.com/Lla-bas/lovecraft-corpus)"
 TIMEOUT = 30
 DELAY = 1.0         # seconds between requests
-MIN_CHARS = 75     # drop shorter fragments
+MIN_CHARS = 75      # drop shorter fragments
 
 LINK_RE = re.compile(r"^([a-z]+)/([a-z0-9_-]+\.aspx)$")
 SKIP_SLUGS = {"chrono.aspx", "index.aspx", "publish.aspx", "contents.aspx"}
+WS_STRIP_SELECTORS = (
+    ".ws-noexport", ".noprint", ".headerContainer", ".footertemplate",
+    ".mw-editsection", ".toc", "sup.reference", "style", "script",
+)
+
+
+@dataclass
+class Entry:
+    key: str            # unique internal key, e.g. "hplovecraft/fiction/cc.aspx"
+    origin: str         # "hplovecraft" | "wikisource"
+    category: str       # "fiction" | "poetry" | "essays" | "letters"
+    title: str
+    source: str         # canonical URL
+    cache_path: Path
+    ws_page: str | None = None
 
 
 # ---------- Extraction ----------
 
-def extract_text(html_bytes: bytes) -> str | None:
-    """ Pull the body from a text page. """
+def extract_hplovecraft(html_bytes: bytes) -> str | None:
+    """Pull the body from an hplovecraft.com text page."""
 
     soup = BeautifulSoup(html_bytes, "html.parser")
     blocks: list[str] = []
@@ -63,6 +83,30 @@ def extract_text(html_bytes: bytes) -> str | None:
     return "\n\n".join(blocks) if blocks else None
 
 
+def extract_wikisource(html_str: str) -> str | None:
+    """Pull the body from a Wikisource API parsed HTML fragment."""
+
+    soup = BeautifulSoup(html_str, "html.parser")
+    for sel in WS_STRIP_SELECTORS:
+        for el in soup.select(sel):
+            el.decompose()
+
+    root = soup.select_one(".prp-pages-output") or soup.select_one(".mw-parser-output") or soup
+    for br in root.find_all("br"):
+        br.replace_with("\n")
+
+    blocks: list[str] = []
+    for el in root.find_all(["p", "div"], recursive=True):
+        if el.name == "div" and "poem" not in (el.get("class") or []):
+            continue
+        if el.name == "p" and el.find_parent("div", class_="poem"):
+            continue
+        t = el.get_text().strip()
+        if t:
+            blocks.append(t)
+    return "\n\n".join(blocks) if blocks else None
+
+
 def normalize(text: str) -> str:
     """CRLF -> LF, strip trailing spaces, collapse >2 blank lines."""
 
@@ -72,7 +116,7 @@ def normalize(text: str) -> str:
     return text.strip()
 
 
-# ---------- IDs ----------
+# ---------- IDs & Deduplication ----------
 
 def slugify(text: str) -> str:
     text = text.lower()
@@ -80,111 +124,241 @@ def slugify(text: str) -> str:
     return text.strip("-") or "untitled"
 
 
-def assign_ids(titles: dict[str, str]) -> dict[str, str]:
-    """ Map cache keys ("fiction/a.aspx") to public ids ("fiction/the-alchemist"). """
+def norm_title(title: str) -> str:
+    """Normalized title for cross-source deduplication."""
+
+    s = slugify(title)
+    return re.sub(r"^(the|a|an)-", "", s)
+
+
+def assign_ids(entries: list[Entry]) -> dict[str, str]:
+    """Map internal entry keys to deterministic public ids ('fiction/the-alchemist')."""
 
     counts: dict[str, int] = {}
     mapping: dict[str, str] = {}
-    for key in sorted(titles):
-        cat, slug = key.split("/", 1)
-        base = slugify(titles.get(key, ""))
+    for e in sorted(entries, key=lambda x: x.key):
+        base = slugify(e.title)
         if base == "untitled":
-            base = slugify(Path(slug).stem) or "untitled"
-        base_id = f"{cat}/{base}"
+            base = slugify(e.cache_path.stem) or "untitled"
+        base_id = f"{e.category}/{base}"
         counts[base_id] = counts.get(base_id, 0) + 1
         n = counts[base_id]
-        mapping[key] = base_id if n == 1 else f"{base_id}-{n}"
+        mapping[e.key] = base_id if n == 1 else f"{base_id}-{n}"
     return mapping
 
+def shingles(text: str, k: int = 5) -> set[tuple[str, ...]]:
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    if len(words) < k:
+        return {tuple(words)}
+    return {tuple(words[i:i + k]) for i in range(len(words) - k + 1)}
 
-# ---------- Scrape ----------
 
-def fetch(session: requests.Session, url: str) -> bytes:
-    """ Single GET; raises on failure. Callers catch and skip. """
+def deduplicate(records: list[dict], threshold: float = 0.6) -> list[dict]:
+    """Drop near-duplicate texts, keeping hplovecraft.com over wikisource."""
 
-    r = session.get(url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
+    # Process hplovecraft.com first so it always wins ties
+    ordered = sorted(records, key=lambda r: (0 if "hplovecraft.com" in r["source"] else 1, r["id"]))
+    kept: list[dict] = []
+    kept_shingles: list[set[tuple[str, ...]]] = []
+
+    for r in ordered:
+        s = shingles(r["text"])
+        dup_of = None
+        for prev, prev_s in zip(kept, kept_shingles):
+            union = len(s | prev_s)
+            if union and (len(s & prev_s) / union) >= threshold:
+                dup_of = prev["id"]
+                break
+        if dup_of:
+            print(f"  DUP  {r['id']}  ≈  {dup_of}")
+        else:
+            kept.append(r)
+            kept_shingles.append(s)
+
+    return kept
+
+# ---------- Discovery ----------
+
+def fetch(session: requests.Session, url: str, params: dict | None = None) -> bytes:
+    r = session.get(url, params=params, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
     r.raise_for_status()
     return r.content
 
-def discover_entries(session: requests.Session) -> dict[str, str]:
-    """Walk /writings/texts/ and return { 'cat/slug.aspx' -> title }."""
 
-    index_url = f"{BASE}/writings/texts/"
+def discover_hplovecraft(session: requests.Session) -> list[Entry]:
+    """Walk /writings/texts/ on hplovecraft.com."""
+
+    index_url = f"{HPL_BASE}/writings/texts/"
     print(f"Index: {index_url}")
     html = fetch(session, index_url)
     soup = BeautifulSoup(html, "html.parser")
 
-    entries: dict[str, str] = {}
+    entries: list[Entry] = []
+    seen: set[str] = set()
     for a in soup.find_all("a", href=True):
         href = a["href"].removeprefix("/writings/texts/")
         m = LINK_RE.match(href)
         if not m or m.group(1) not in CATEGORIES or m.group(2) in SKIP_SLUGS:
             continue
-        if href not in entries:
-            entries[href] = a.get_text(" ", strip=True)
+        if href in seen:
+            continue
+        seen.add(href)
+        cat, slug = m.group(1), m.group(2)
+        entries.append(Entry(
+            key=f"hplovecraft/{href}",
+            origin="hplovecraft",
+            category=cat,
+            title=a.get_text(" ", strip=True),
+            source=f"{HPL_BASE}/writings/texts/{href}",
+            cache_path=CACHE_DIR / "hplovecraft" / cat / f"{slug}.txt",
+        ))
 
     print(f"  {len(entries)} links")
     return entries
 
 
-def scrape_texts(session: requests.Session, entries: dict[str, str]) -> None:
-    """ Download each entry into cache/<key>.txt. """
+def discover_wikisource(session: requests.Session) -> list[Entry]:
+    """Walk Poetry and Essays sections of the Wikisource author page."""
 
-    total = len(entries)
-    for i, key in enumerate(sorted(entries), 1):
-        out = CACHE_DIR / (key + ".txt")
-        if out.exists():
-            print(f"[{i:>3}/{total}] cached {key}")
+    print(f"Index: {WS_BASE}{WS_AUTHOR_PAGE.replace(' ', '_')}")
+    raw = fetch(session, WS_API, params={
+        "action": "parse",
+        "page": WS_AUTHOR_PAGE,
+        "prop": "text",
+        "format": "json",
+        "redirects": 1,
+    })
+    html = json.loads(raw)["parse"]["text"]["*"]
+    soup = BeautifulSoup(html, "html.parser")
+
+    entries: list[Entry] = []
+    seen_pages: set[str] = set()
+
+    for heading_id, cat in WS_SECTIONS.items():
+        if cat not in CATEGORIES:
+            continue
+        h = soup.find(id=heading_id)
+        if not h:
+            print(f"  WARN section '{heading_id}' not found")
             continue
 
-        url = f"{BASE}/writings/texts/{key}"
-        print(f"[{i:>3}/{total}] fetch  {url}")
+        # Modern MediaWiki wraps headings in <div class="mw-heading">
+        node = h.parent if h.parent and "mw-heading" in (h.parent.get("class") or []) else h
+        for sib in node.find_next_siblings():
+            if sib.name in ("h2", "h3") or "mw-heading" in (sib.get("class") or []):
+                break
+            for li in sib.find_all("li"):
+                a = li.find("a", href=True)
+                if not a or "new" in (a.get("class") or []):
+                    continue
+                href = a["href"]
+                if not href.startswith("/wiki/") or ":" in href.removeprefix("/wiki/"):
+                    continue
+                page = unquote(href.removeprefix("/wiki/").split("#", 1)[0])
+                if page in seen_pages:
+                    continue
+                seen_pages.add(page)
+                title = a.get_text(" ", strip=True)
+                slug = slugify(title)
+                entries.append(Entry(
+                    key=f"wikisource/{cat}/{slug}",
+                    origin="wikisource",
+                    category=cat,
+                    title=title,
+                    source=f"{WS_BASE}{quote(page, safe='()/_-')}",
+                    cache_path=CACHE_DIR / "wikisource" / cat / f"{slug}.txt",
+                    ws_page=page,
+                ))
+
+    print(f"  {len(entries)} links")
+    return entries
+
+
+def merge_entries(primary: list[Entry], secondary: list[Entry]) -> list[Entry]:
+    """Keep all primary entries; append secondary entries not already present."""
+
+    seen = {(e.category, norm_title(e.title)) for e in primary}
+    merged = list(primary)
+    added = 0
+    for e in secondary:
+        sig = (e.category, norm_title(e.title))
+        if sig not in seen:
+            seen.add(sig)
+            merged.append(e)
+            added += 1
+    print(f"Merged: {len(primary)} primary + {added} new from Wikisource ({len(secondary) - added} duplicates skipped)")
+    return merged
+
+
+# ---------- Scrape ----------
+
+def scrape_entries(session: requests.Session, entries: list[Entry]) -> None:
+    """Download each entry into its cache path."""
+
+    total = len(entries)
+    for i, e in enumerate(sorted(entries, key=lambda x: x.key), 1):
+        if e.cache_path.exists():
+            print(f"[{i:>3}/{total}] cached {e.key}")
+            continue
+
+        print(f"[{i:>3}/{total}] fetch  {e.source}")
         try:
-            html = fetch(session, url)
-            text = extract_text(html)
+            if e.origin == "hplovecraft":
+                text = extract_hplovecraft(fetch(session, e.source))
+            else:
+                raw = fetch(session, WS_API, params={
+                    "action": "parse",
+                    "page": e.ws_page,
+                    "prop": "text",
+                    "format": "json",
+                    "redirects": 1,
+                })
+                html_str = json.loads(raw)["parse"]["text"]["*"]
+                text = extract_wikisource(html_str)
+
             if not text:
-                print("    WARN no div[align=justify]")
+                print("    WARN no text extracted")
                 continue
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(normalize(text) + "\n", encoding="utf-8")
+            e.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            e.cache_path.write_text(normalize(text) + "\n", encoding="utf-8")
             print(f"    saved {len(text):,} chars")
-        except Exception as e:
-            print(f"    ERROR {e}")
+        except Exception as exc:
+            print(f"    ERROR {exc}")
         time.sleep(DELAY)
 
 # ---------- Build ----------
 
-def build_corpus(entries: dict[str, str]) -> list[dict]:
-    """ Read cache/ and write data/lovecraft.jsonl. """
-    
+def build_corpus(entries: list[Entry]) -> list[dict]:
+    """Read cache/ and write data/lovecraft.jsonl."""
+
     id_map = assign_ids(entries)
     records: list[dict] = []
     skipped = 0
 
-    for key, title in sorted(entries.items()):
-        path = CACHE_DIR / (key + ".txt")
-        if not path.exists():
+    for e in sorted(entries, key=lambda x: x.key):
+        if not e.cache_path.exists():
             continue
-        text = path.read_text(encoding="utf-8").strip()
+        text = e.cache_path.read_text(encoding="utf-8").strip()
         if len(text) < MIN_CHARS:
             skipped += 1
             continue
         records.append({
-            "id": id_map[key],
-            "category": key.split("/", 1)[0],
-            "title": title,
-            "source": f"{BASE}/writings/texts/{key}",
+            "id": id_map[e.key],
+            "category": e.category,
+            "title": e.title,
+            "source": e.source,
             "chars": len(text),
             "text": text,
         })
 
+    records = deduplicate(records)
     records.sort(key=lambda r: r["id"])
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     with CORPUS_PATH.open("w", encoding="utf-8") as f:
         for r in records:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-    print(f"\nExport")
+    print("\nExport")
     print(f"  documents written : {len(records)}")
     print(f"  skipped short     : {skipped}  (min_chars={MIN_CHARS})")
     print(f"  JSONL             : {CORPUS_PATH}  ({CORPUS_PATH.stat().st_size:,} bytes)")
@@ -209,10 +383,12 @@ def print_stats(records: list[dict]) -> None:
 
 def main() -> None:
     session = requests.Session()
-    entries = discover_entries(session)
+    hpl = discover_hplovecraft(session)
+    ws = discover_wikisource(session)
+    entries = merge_entries(hpl, ws)
     if not entries:
         sys.exit("No entries discovered due to changed site structure or network error.")
-    scrape_texts(session, entries)
+    scrape_entries(session, entries)
     print_stats(build_corpus(entries))
 
 
