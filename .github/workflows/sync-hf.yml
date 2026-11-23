@@ -1,0 +1,44 @@
+name: Sync dataset to Hugging Face
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - data/lovecraft.jsonl
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install huggingface_hub
+        run: pip install --quiet huggingface_hub
+
+      - name: Upload data/lovecraft.jsonl to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO_ID: Lla-bas/lovecraft-comprehensive-corpus
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          python - <<'EOF'
+          import os
+          from huggingface_hub import HfApi
+
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          api.upload_file(
+              path_or_fileobj="data/lovecraft.jsonl",
+              path_in_repo="data/lovecraft.jsonl",
+              repo_id=os.environ["HF_REPO_ID"],
+              repo_type="dataset",
+              commit_message=f"Sync data/lovecraft.jsonl ({os.environ['GITHUB_SHA'][:7]})",
+          )
+          EOF

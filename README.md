@@ -1,7 +1,7 @@
 # H.P. Lovecraft Digital Archive
 
 [![Read Online](https://img.shields.io/badge/Read%20Online-Digital%20Archive-6b3a2e)](https://lla-bas.github.io/lovecraft-digital-archive/)
-[![Hugging Face Dataset](https://img.shields.io/badge/🤗%20Hugging%20Face-Dataset-yellow)](https://huggingface.co/datasets/Gyran/lovecraft-comprehensive-corpus)
+[![Hugging Face Dataset](https://img.shields.io/badge/🤗%20Hugging%20Face-Dataset-yellow)](https://huggingface.co/datasets/Lla-bas/lovecraft-comprehensive-corpus)
 
 A searchable digital archive of H.P. Lovecraft's fiction, essays, poetry, and personal correspondence, compiled into a clean reading interface and a single structured text file.
 
