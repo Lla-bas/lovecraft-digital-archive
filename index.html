@@ -113,6 +113,16 @@
       cursor: pointer;
     }
 
+    .sort-select {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 5px;
+      padding: 0.15rem 0.35rem;
+      font-size: 0.75rem;
+      cursor: pointer;
+    }
+
     .pills {
       display: flex;
       flex-wrap: wrap;
@@ -382,7 +392,14 @@
       <input type="search" id="search" class="search-box" placeholder="Search titles..." autocomplete="off" />
       <div class="search-options">
         <label><input type="checkbox" id="fullText" /> Search full text</label>
-        <span id="count">Loading…</span>
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+          <select id="sortBy" class="sort-select" aria-label="Sort works">
+            <option value="title">A–Z</option>
+            <option value="date-asc">Oldest</option>
+            <option value="date-desc">Newest</option>
+          </select>
+          <span id="count">Loading…</span>
+        </div>
       </div>
       <div class="pills" id="pills"></div>
     </div>
@@ -411,6 +428,7 @@
     const reader = $("reader");
     const searchInput = $("search");
     const fullTextToggle = $("fullText");
+    const sortSelect = $("sortBy");
     const countEl = $("count");
     const pillsEl = $("pills");
 
@@ -455,9 +473,22 @@
       return (start > 0 ? "…" : "") + text.slice(start, end).replace(/\s+/g, " ") + (end < text.length ? "…" : "");
     }
 
+    function compareDocs(a, b, sortBy) {
+      if (sortBy === "date-asc" || sortBy === "date-desc") {
+        if (a.date && b.date) {
+          const cmp = a.date.localeCompare(b.date);
+          if (cmp !== 0) return sortBy === "date-asc" ? cmp : -cmp;
+        } else if (a.date || b.date) {
+          return a.date ? -1 : 1; // undated always at the end
+        }
+      }
+      return a.title.localeCompare(b.title);
+    }
+
     function applyFilter() {
       const q = searchInput.value.trim().toLowerCase();
       const useFullText = fullTextToggle.checked;
+      const sortBy = sortSelect.value;
 
       filtered = docs.filter((d) => {
         if (activeCat !== "all" && d.category !== activeCat) return false;
@@ -466,13 +497,14 @@
         return useFullText && d._textLower.includes(q);
       });
 
-      if (q) {
-        filtered.sort((a, b) => {
+      filtered.sort((a, b) => {
+        if (q) {
           const aTitle = a._titleLower.includes(q) ? 0 : 1;
           const bTitle = b._titleLower.includes(q) ? 0 : 1;
-          return aTitle - bTitle || a.title.localeCompare(b.title);
-        });
-      }
+          if (aTitle !== bTitle) return aTitle - bTitle;
+        }
+        return compareDocs(a, b, sortBy);
+      });
 
       countEl.textContent = `${filtered.length} work${filtered.length === 1 ? "" : "s"}`;
 
@@ -483,7 +515,7 @@
         return `
           <li class="doc-item ${d.id === activeId ? "active" : ""}" data-id="${escapeHtml(d.id)}">
             <div class="doc-title">${escapeHtml(d.title)}</div>
-            <div class="doc-meta">${d.category} · ${d._words.toLocaleString()} words</div>${snippet}
+            <div class="doc-meta">${d.category}${d.date ? ` · ${escapeHtml(d.date)}` : ""} · ${d._words.toLocaleString()} words</div>${snippet}
           </li>
         `;
       }).join("");
@@ -555,6 +587,7 @@
             <div class="article-cat">${escapeHtml(doc.category)}</div>
             <h2>${escapeHtml(doc.title)}</h2>
             <div class="article-sub">
+              ${doc.date ? `<span>${escapeHtml(doc.date)}</span>` : ""}
               <span>${doc._words.toLocaleString()} words</span>
               <span>Source: <a href="${escapeHtml(doc.source)}" target="_blank" rel="noopener">${escapeHtml(sourceHost(doc.source))}</a></span>
             </div>
@@ -604,6 +637,7 @@
       searchInput.placeholder = fullTextToggle.checked ? "Search titles & text..." : "Search titles...";
       applyFilter();
     });
+    sortSelect.addEventListener("change", applyFilter);
 
     window.addEventListener("hashchange", () => {
       const id = decodeURIComponent(location.hash.slice(1));

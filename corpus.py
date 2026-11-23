@@ -43,6 +43,7 @@ BASE_DIR = Path(__file__).resolve().parent
 CACHE_DIR = BASE_DIR / "cache"
 DATA_DIR = BASE_DIR / "data"
 CORPUS_PATH = DATA_DIR / "lovecraft.jsonl"
+DATES_PATH = DATA_DIR / "dates.json"
 
 USER_AGENT = "lovecraft-corpus/1.0 (https://github.com/Lla-bas/lovecraft-corpus)"
 TIMEOUT = 30
@@ -72,6 +73,7 @@ class Entry:
     title: str
     source: str         # canonical URL
     cache_path: Path
+    date: str | None = None
     ws_page: str | None = None
     raw_url: str | None = None
 
@@ -251,6 +253,62 @@ def deduplicate(records: list[dict], threshold: float = 0.6) -> list[dict]:
     return kept
 
 
+MONTHS = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6, "jul": 7, "aug": 8,
+    "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+MONTH_RE = "|".join(sorted(MONTHS, key=len, reverse=True))
+
+
+_Y = r"(?P<y>(?:18|19)\d{2})"
+_M = rf"(?P<m>{MONTH_RE})\.?"
+_D = r"(?P<d>\d{1,2})(?:st|nd|rd|th)?"
+
+DATE_PATTERNS = tuple(re.compile(p, re.I) for p in (
+    rf"\b{_Y}-(?P<m>\d{{2}})-(?P<d>\d{{2}})\b",       # 1927-11-27
+    rf"\b{_Y}-(?P<m>\d{{2}})\b",                      # 1927-11
+    rf"\b{_Y}[,\s]+{_M}\s+{_D}\b",                    # 1905, April 21
+    rf"\b{_D}\s+{_M}\s+{_Y}\b",                       # 14th December 1933
+    rf"\b{_M}\s+{_D},?\s+{_Y}\b",                     # November 27, 1927
+    rf"\b{_Y}[,\s]+{_M}\b",                           # 1917, June
+    rf"\b{_M}\s+{_Y}\b",                              # April 1917
+    rf"\b{_Y}\b",                                     # 1897
+))
+
+
+def parse_date(text: str) -> str | None:
+    """Extract a partial ISO date (YYYY-MM-DD, YYYY-MM, or YYYY) from free text."""
+
+    for pat in DATE_PATTERNS:
+        if m := pat.search(text):
+            g = m.groupdict()
+            parts = [g["y"]]
+            if g.get("m"):
+                mon = int(g["m"]) if g["m"].isdigit() else MONTHS[g["m"].lower()]
+                parts.append(f"{mon:02d}")
+            if g.get("d"):
+                parts.append(f"{int(g['d']):02d}")
+            return "-".join(parts)
+    return None
+
+
+LETTER_DATE_SUFFIXES = tuple(re.compile(p, re.I) for p in (
+    r"\s*\((?:18|19)\d{2}(?:-\d{2}){0,2}\)\s*$",
+    rf",\s*{_D}\s+{_M}\s+{_Y}\s*$",
+    rf",\s*{_M}\s+{_D},?\s+{_Y}\s*$",
+))
+
+
+def strip_letter_date(title: str) -> str:
+    """Remove trailing date suffixes from letter titles so dates aren't duplicated in title/id."""
+
+    for pat in LETTER_DATE_SUFFIXES:
+        title = pat.sub("", title)
+    return re.sub(r"\s{2,}", " ", title).strip()
+
+
 # ---------- Discovery ----------
 
 def fetch(session: requests.Session, url: str, params: dict | None = None) -> bytes:
@@ -269,6 +327,36 @@ def fetch_ws_html(session: requests.Session, page: str) -> str:
     })
     return json.loads(raw)["parse"]["text"]["*"]
 
+def discover_hplovecraft_dates(session: requests.Session) -> dict[tuple[str, str], str]:
+    """Fetch composition dates from hplovecraft.com fiction chronology and poetry index."""
+
+    dates: dict[tuple[str, str], str] = {}
+    try:
+        soup = BeautifulSoup(fetch(session, f"{HPL_BASE}/writings/fiction/chrono.aspx"), "html.parser")
+        for a in soup.find_all("a", href=re.compile(r"^[a-z0-9_-]+\.aspx$")):
+            if a.previous_sibling and (d := parse_date(str(a.previous_sibling))):
+                dates[("fiction", a["href"])] = d
+    except Exception as exc:
+        print(f"  WARN fiction dates unavailable: {exc}")
+
+    try:
+        soup = BeautifulSoup(fetch(session, f"{HPL_BASE}/writings/poetry/"), "html.parser")
+        for a in soup.find_all("a", href=re.compile(r"p\d+\.aspx$")):
+            slug = a["href"].split("/")[-1]
+            chunks: list[str] = []
+            for sib in a.next_siblings:
+                s = sib.get_text(" ", strip=True) if hasattr(sib, "get_text") else str(sib)
+                chunks.append(s)
+                if "]" in s or getattr(sib, "name", None) == "br":
+                    break
+            if d := parse_date(" ".join(chunks)):
+                dates[("poetry", slug)] = d
+    except Exception as exc:
+        print(f"  WARN poetry dates unavailable: {exc}")
+
+    return dates
+
+
 def discover_hplovecraft(session: requests.Session) -> list[Entry]:
     """Walk /writings/texts/ on hplovecraft.com."""
 
@@ -276,6 +364,7 @@ def discover_hplovecraft(session: requests.Session) -> list[Entry]:
     print(f"Index: {index_url}")
     html = fetch(session, index_url)
     soup = BeautifulSoup(html, "html.parser")
+    hpl_dates = discover_hplovecraft_dates(session)
 
     entries: list[Entry] = []
     seen: set[str] = set()
@@ -288,13 +377,17 @@ def discover_hplovecraft(session: requests.Session) -> list[Entry]:
             continue
         seen.add(href)
         cat, slug = m.group(1), m.group(2)
+        raw_title = a.get_text(" ", strip=True)
+        date = hpl_dates.get((cat, slug)) or (parse_date(raw_title) if cat == "letters" else None)
+        title = strip_letter_date(raw_title) if cat == "letters" else raw_title
         entries.append(Entry(
             key=f"hplovecraft/{href}",
             origin="hplovecraft",
             category=cat,
-            title=a.get_text(" ", strip=True),
+            title=title,
             source=f"{HPL_BASE}/writings/texts/{href}",
             cache_path=CACHE_DIR / "hplovecraft" / cat / f"{slug}.txt",
+            date=date,
         ))
 
     print(f"  {len(entries)} links")
@@ -333,8 +426,10 @@ def discover_wikisource(session: requests.Session) -> list[Entry]:
                 if page in seen_pages or page in WS_SKIP_PAGES:
                     continue
                 seen_pages.add(page)
-                title = a.get_text(" ", strip=True)
-                slug = slugify(title)
+                raw_title = a.get_text(" ", strip=True)
+                date = parse_date(li.get_text(" ", strip=True))
+                title = strip_letter_date(raw_title) if cat == "letters" else raw_title
+                slug = slugify(raw_title)
                 entries.append(Entry(
                     key=f"wikisource/{cat}/{slug}",
                     origin="wikisource",
@@ -342,6 +437,7 @@ def discover_wikisource(session: requests.Session) -> list[Entry]:
                     title=title,
                     source=f"{WS_BASE}{quote(page, safe='()/_-')}",
                     cache_path=CACHE_DIR / "wikisource" / cat / f"{slug}.txt",
+                    date=date,
                     ws_page=page,
                 ))
 
@@ -368,9 +464,10 @@ def discover_lettercraft(session: requests.Session) -> list[Entry]:
         if m:
             year, month, day, recipient = m.groups()
             words = [LC_TYPOS.get(w, w) for w in recipient.split("-")]
-            date_str = f"{year}-{month}" if day == "99" else f"{year}-{month}-{day}"
-            title = f"Letter to {' '.join(words)} ({date_str})"
+            date = f"{year}-{month}" if day == "99" else f"{year}-{month}-{day}"
+            title = f"Letter to {' '.join(words)}"
         else:
+            date = parse_date(stem)
             title = stem.replace("-", " ")
 
         entries.append(Entry(
@@ -380,6 +477,7 @@ def discover_lettercraft(session: requests.Session) -> list[Entry]:
             title=title,
             source=item["html_url"],
             cache_path=CACHE_DIR / "lettercraft" / "letters" / f"{stem}.txt",
+            date=date,
             raw_url=item["download_url"],
         ))
 
@@ -388,14 +486,14 @@ def discover_lettercraft(session: requests.Session) -> list[Entry]:
 
 
 def merge_entries(*sources: list[Entry]) -> list[Entry]:
-    """Merge entry lists in priority order, skipping duplicate (category, norm_title)."""
+    """Merge entry lists in priority order, skipping duplicate (category, norm_title[, date])."""
 
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, ...]] = set()
     merged: list[Entry] = []
     skipped = 0
     for src in sources:
         for e in src:
-            sig = (e.category, norm_title(e.title))
+            sig = (e.category, norm_title(e.title), e.date or "") if e.category == "letters" else (e.category, norm_title(e.title))
             if sig not in seen:
                 seen.add(sig)
                 merged.append(e)
@@ -445,6 +543,9 @@ def build_corpus(entries: list[Entry]) -> list[dict]:
     """Read cache/ and write data/lovecraft.jsonl."""
 
     id_map = assign_ids(entries)
+    date_overrides: dict[str, str] = (
+        json.loads(DATES_PATH.read_text(encoding="utf-8")) if DATES_PATH.exists() else {}
+    )
     records: list[dict] = []
     skipped = 0
 
@@ -459,10 +560,12 @@ def build_corpus(entries: list[Entry]) -> list[dict]:
         if e.category != "poetry" and len(text) < MIN_CHARS: # poetry can be short!
             skipped += 1
             continue
+        doc_id = id_map[e.key]
         records.append({
-            "id": id_map[e.key],
+            "id": doc_id,
             "category": e.category,
             "title": e.title,
+            "date": date_overrides.get(doc_id, e.date),
             "source": e.source,
             "chars": len(text),
             "text": text,
