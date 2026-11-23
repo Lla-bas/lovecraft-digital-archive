@@ -84,18 +84,19 @@ def extract_hplovecraft(html_bytes: bytes) -> str | None:
     soup = BeautifulSoup(html_bytes, "html.parser")
     blocks: list[str] = []
     for div in soup.find_all("div", {"align": "justify"}):
-        paras = div.find_all("p")
-        if paras:
-            for p in paras:
-                for br in p.find_all("br"):
-                    br.replace_with("\n")
-                t = p.get_text().strip()
-                if t:
-                    blocks.append(t)
-        else:
-            t = div.get_text(separator="\n").strip()
-            if t:
-                blocks.append(t)
+        if div.find_parent("div", {"align": "justify"}):
+            continue
+        for br in div.find_all("br"):
+            br.replace_with("\n")
+        for blk in div.find_all(["p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote"]):
+            blk.insert_before("\n\n")
+            blk.insert_after("\n\n")
+        for tr in div.find_all("tr"):
+            tr.insert_before("\n")
+            tr.insert_after("\n")
+        t = div.get_text().strip()
+        if t:
+            blocks.append(t)
     return "\n\n".join(blocks) if blocks else None
 
 
@@ -147,19 +148,53 @@ def normalize(text: str) -> str:
     return text.strip()
 
 
+BYLINE_RE = re.compile(
+    r"^(?:by\s+)?(?:h\.?\s*p\.?|howard\s+phillips)\s+lovecraft\.?$",
+    re.IGNORECASE,
+)
+
+
+def _alnum(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+
+
+def strip_leading_title(text: str, title: str) -> str:
+    """Remove a leading title (and immediate Lovecraft byline) duplicated from metadata."""
+
+    paras = text.split("\n\n")
+    nt = _alnum(title)
+    if len(paras) < 2 or not nt:
+        return text
+
+    p0 = _alnum(paras[0])
+    stripped = False
+    if p0 == nt or re.fullmatch(re.escape(nt) + r" \d{4}", p0):
+        paras = paras[1:]
+        stripped = True
+    elif len(paras) >= 3:
+        comb = _alnum(paras[0] + " " + paras[1])
+        if comb == nt or re.fullmatch(
+            re.escape(nt) + r"(?: [a-z]+ \d{1,2} \d{4}| \d{4})", comb
+        ):
+            paras = paras[2:]
+            stripped = True
+
+    if stripped and len(paras) >= 2 and BYLINE_RE.match(paras[0].strip()):
+        paras = paras[1:]
+
+    return "\n\n".join(paras)
+
+
 # ---------- IDs & Deduplication ----------
 
 def slugify(text: str) -> str:
-    text = text.lower()
-    text = re.sub(r"[^a-z0-9]+", "-", text)
-    return text.strip("-") or "untitled"
+    return _alnum(text).replace(" ", "-") or "untitled"
 
 
 def norm_title(title: str) -> str:
     """Normalized title for cross-source deduplication."""
 
-    s = slugify(title)
-    return re.sub(r"^(the|a|an)-", "", s)
+    return re.sub(r"^(the|a|an)-", "", slugify(title))
 
 
 def assign_ids(entries: list[Entry]) -> dict[str, str]:
@@ -185,12 +220,11 @@ def shingles(text: str, k: int = 5) -> set[tuple[str, ...]]:
     return {tuple(words[i:i + k]) for i in range(len(words) - k + 1)}
 
 
+ORIGIN_DOMAINS = ("hplovecraft.com", "wikisource.org")
+
+
 def source_priority(source_url: str) -> int:
-    if "hplovecraft.com" in source_url:
-        return 0
-    if "wikisource.org" in source_url:
-        return 1
-    return 2
+    return next((i for i, d in enumerate(ORIGIN_DOMAINS) if d in source_url), len(ORIGIN_DOMAINS))
 
 
 def deduplicate(records: list[dict], threshold: float = 0.6) -> list[dict]:
@@ -223,6 +257,17 @@ def fetch(session: requests.Session, url: str, params: dict | None = None) -> by
     r = session.get(url, params=params, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
     r.raise_for_status()
     return r.content
+
+
+def fetch_ws_html(session: requests.Session, page: str) -> str:
+    raw = fetch(session, WS_API, params={
+        "action": "parse",
+        "page": page,
+        "prop": "text",
+        "format": "json",
+        "redirects": 1,
+    })
+    return json.loads(raw)["parse"]["text"]["*"]
 
 def discover_hplovecraft(session: requests.Session) -> list[Entry]:
     """Walk /writings/texts/ on hplovecraft.com."""
@@ -260,15 +305,7 @@ def discover_wikisource(session: requests.Session) -> list[Entry]:
     """Walk Poetry, Essays, and Letters sections of the Wikisource author page."""
 
     print(f"Index: {WS_BASE}{WS_AUTHOR_PAGE.replace(' ', '_')}")
-    raw = fetch(session, WS_API, params={
-        "action": "parse",
-        "page": WS_AUTHOR_PAGE,
-        "prop": "text",
-        "format": "json",
-        "redirects": 1,
-    })
-    html = json.loads(raw)["parse"]["text"]["*"]
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(fetch_ws_html(session, WS_AUTHOR_PAGE), "html.parser")
 
     entries: list[Entry] = []
     seen_pages: set[str] = set()
@@ -370,6 +407,14 @@ def merge_entries(*sources: list[Entry]) -> list[Entry]:
 
 # ---------- Scrape ----------
 
+def fetch_entry_text(session: requests.Session, e: Entry) -> str | None:
+    if e.origin == "hplovecraft":
+        return extract_hplovecraft(fetch(session, e.source))
+    if e.origin == "wikisource":
+        return extract_wikisource(fetch_ws_html(session, e.ws_page))
+    return extract_lettercraft(fetch(session, e.raw_url))
+
+
 def scrape_entries(session: requests.Session, entries: list[Entry]) -> None:
     """Download each entry into its cache path."""
 
@@ -381,27 +426,14 @@ def scrape_entries(session: requests.Session, entries: list[Entry]) -> None:
 
         print(f"[{i:>3}/{total}] fetch  {e.source}")
         try:
-            if e.origin == "hplovecraft":
-                text = extract_hplovecraft(fetch(session, e.source))
-            elif e.origin == "wikisource":
-                raw = fetch(session, WS_API, params={
-                    "action": "parse",
-                    "page": e.ws_page,
-                    "prop": "text",
-                    "format": "json",
-                    "redirects": 1,
-                })
-                html_str = json.loads(raw)["parse"]["text"]["*"]
-                text = extract_wikisource(html_str)
-            else:
-                text = extract_lettercraft(fetch(session, e.raw_url))
-
+            text = fetch_entry_text(session, e)
             if not text:
                 print("    WARN no text extracted")
                 continue
+            cleaned = normalize(text)
             e.cache_path.parent.mkdir(parents=True, exist_ok=True)
-            e.cache_path.write_text(normalize(text) + "\n", encoding="utf-8")
-            print(f"    saved {len(text):,} chars")
+            e.cache_path.write_text(cleaned + "\n", encoding="utf-8")
+            print(f"    saved {len(cleaned):,} chars")
         except Exception as exc:
             print(f"    ERROR {exc}")
         time.sleep(DELAY)
@@ -423,6 +455,7 @@ def build_corpus(entries: list[Entry]) -> list[dict]:
         if e.category in ("fiction", "essays"):
             text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
             text = re.sub(r" {2,}", " ", text)
+        text = strip_leading_title(text, e.title)
         if e.category != "poetry" and len(text) < MIN_CHARS: # poetry can be short!
             skipped += 1
             continue
@@ -453,27 +486,30 @@ def print_stats(records: list[dict]) -> None:
     if not records:
         print("\nCorpus is empty.")
         return
-    by_cat = Counter(r["category"] for r in records)
-    total_chars = sum(r["chars"] for r in records)
+    counts: Counter[str] = Counter()
+    chars: Counter[str] = Counter()
+    for r in records:
+        counts[r["category"]] += 1
+        chars[r["category"]] += r["chars"]
     print("\nCorpus summary:")
-    for cat in sorted(by_cat):
-        n = by_cat[cat]
-        chars = sum(r["chars"] for r in records if r["category"] == cat)
-        print(f"  {cat:8s} {n:>4} docs  {chars:>12,} chars")
-    print(f"  {'TOTAL':8s} {len(records):>4} docs  {total_chars:>12,} chars")
+    for cat in sorted(counts):
+        print(f"  {cat:8s} {counts[cat]:>4} docs  {chars[cat]:>12,} chars")
+    print(f"  {'TOTAL':8s} {len(records):>4} docs  {sum(chars.values()):>12,} chars")
 
 
 # ---------- Main ----------
 
 def main() -> None:
     session = requests.Session()
-    hpl = discover_hplovecraft(session)
-    ws = discover_wikisource(session)
-    lc = discover_lettercraft(session)
-    entries = merge_entries(hpl, ws, lc)
+    entries = merge_entries(
+        discover_hplovecraft(session),
+        discover_wikisource(session),
+        discover_lettercraft(session),
+    )
     if not entries:
         sys.exit("No entries discovered due to changed site structure or network error.")
-    scrape_entries(session, entries)
+    if "--no-scrape" not in sys.argv:
+        scrape_entries(session, entries)
     print_stats(build_corpus(entries))
 
 

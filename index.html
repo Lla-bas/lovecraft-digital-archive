@@ -434,17 +434,17 @@
       }
     }
 
-    function renderPills() {
+    function setActiveItem(id) {
+      docList.querySelector(".doc-item.active")?.classList.remove("active");
+      if (id) {
+        docList.querySelector(`.doc-item[data-id="${CSS.escape(id)}"]`)?.classList.add("active");
+      }
+    }
+
+    function initPills() {
       pillsEl.innerHTML = CATEGORIES.map((cat) =>
         `<button class="pill ${cat === activeCat ? "active" : ""}" data-cat="${cat}">${cat}</button>`
       ).join("");
-      pillsEl.querySelectorAll(".pill").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          activeCat = btn.dataset.cat;
-          renderPills();
-          applyFilter();
-        });
-      });
     }
 
     function makeSnippet(text, query) {
@@ -487,21 +487,15 @@
           </li>
         `;
       }).join("");
-
-      docList.querySelectorAll(".doc-item").forEach((li) => {
-        li.addEventListener("click", () => {
-          openDoc(li.dataset.id);
-          sidebar.classList.remove("open");
-        });
-      });
     }
 
     function renderWelcome() {
       activeId = null;
+      setActiveItem(null);
       history.replaceState(null, "", location.pathname);
       document.title = "H.P. Lovecraft — Digital Archive";
 
-      const counts = { fiction: 0, essays: 0, poetry: 0, letters: 0 };
+      const counts = Object.fromEntries(CATEGORIES.slice(1).map((c) => [c, 0]));
       let totalWords = 0;
       for (const d of docs) {
         if (counts[d.category] !== undefined) counts[d.category]++;
@@ -535,7 +529,6 @@
         const pick = docs[Math.floor(Math.random() * docs.length)];
         if (pick) openDoc(pick.id);
       });
-      applyFilter();
     }
 
     function openDoc(id, updateHash = true) {
@@ -580,9 +573,7 @@
       if (next) $("nextBtn").addEventListener("click", () => openDoc(next.id));
 
       reader.scrollTop = 0;
-      docList.querySelectorAll(".doc-item").forEach((li) => {
-        li.classList.toggle("active", li.dataset.id === activeId);
-      });
+      setActiveItem(activeId);
     }
 
     // Theme toggle (defaults to warm paper)
@@ -619,9 +610,26 @@
       if (id && id !== activeId) openDoc(id, false);
     });
 
+    // Delegated sidebar listeners
+    pillsEl.addEventListener("click", (e) => {
+      const btn = e.target.closest(".pill");
+      if (!btn || btn.dataset.cat === activeCat) return;
+      activeCat = btn.dataset.cat;
+      pillsEl.querySelector(".pill.active")?.classList.remove("active");
+      btn.classList.add("active");
+      applyFilter();
+    });
+
+    docList.addEventListener("click", (e) => {
+      const li = e.target.closest(".doc-item");
+      if (!li) return;
+      openDoc(li.dataset.id);
+      sidebar.classList.remove("open");
+    });
+
     // Boot
     async function init() {
-      renderPills();
+      initPills();
       try {
         const res = await fetch(DATA_URL);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
